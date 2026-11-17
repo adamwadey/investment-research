@@ -86,3 +86,25 @@ Append every **high-conviction** ticker (total 12+/15 with no score below 3) to 
 ## Step 5 - Report back
 
 Tell the user: the report path, the 2-3 headline trends, the high-conviction tickers added to the watchlist, anything not buyable on Freetrade, and any feeds or data that failed.
+
+## Scheduled runs - market-day check and email
+
+When this skill runs unattended from the scheduled task (rather than typed by the user):
+
+**Before Step 1 - market-day check.** Only proceed on a weekday when at least one of the London Stock Exchange or the New York Stock Exchange is open for trading that day. Check with a web search for today's date (bank holidays, Good Friday, Christmas, New Year, US holidays such as Thanksgiving). If both are closed, stop: write no report and send no email. If only one is open, proceed and say which is closed in the email's first line.
+
+**After Step 4 - commit and push** the new report and watchlist to `main`.
+
+**Then email the briefing** to the user with the Gmail connector, as an HTML email of about 350-450 words (the length of the 2026-11-15 trial):
+
+- Subject: `Daily Investment Briefing - <Day DD Mon YYYY>`
+- Short research-only disclaimer at the very top
+- **Today's bottom line** (2-3 sentences, the single most useful judgement)
+- **What changed** (3-5 bullets)
+- **Top ideas** table: share, price, forward P/E, revenue growth, score /15, one-line why
+- **The honest risks** (one bullet per top idea, plus concentration)
+- **Short-term trades** with their entry conditions, or "None today that pass verification"
+- **Freetrade notes** (availability, FX fee, stamp duty, better-suited platform where relevant)
+- Footer: how many shares were checked and passed, watchlist additions, data caveats, and the path of the full report in the repository
+
+Plain English, no hype. Every figure must come from the report. Send exactly one email per run. If the scan fails part-way, send a short email saying what failed instead of a partial or unverified briefing.
