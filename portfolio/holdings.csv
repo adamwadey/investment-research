@@ -1,0 +1,6 @@
+symbol,freetrade_ticker,name,type,value_gbp,pct_since_bought,value_date,ref_price,ref_currency,ref_gbpusd,notes
+VUAG.L,VUAG,Vanguard S&P 500 UCITS ETF (Acc),ETF - US large caps,10500,-3.2,2026-11-18,108.44,GBP,1.3165,"Tracks the 500 largest US companies; already contains Nvidia, Eli Lilly and IBM"
+IBM,IBM,IBM,Share - US tech services,2947.23,-4.33,2026-11-18,231.09,USD,1.3165,
+NVDA,NVDA,NVIDIA,Share - US semiconductors,2792.43,3.1,2026-11-18,155.46,USD,1.3165,
+COPG.L,COPG,Global X Copper Miners UCITS ETF (Acc),ETF - global copper miners,2682.38,-27.23,2026-11-18,37.77,GBP,1.3165,
+LLY,LLY,Eli Lilly,Share - US pharmaceuticals,1715,1.5,2026-11-18,1415.55,USD,1.3165,

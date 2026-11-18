@@ -5,19 +5,21 @@ description: Run the daily live-market investment scan - gather global news, ext
 
 # Daily Scan
 
-Produce today's investment briefing. Follow the rules in `CLAUDE.md` throughout (second-order thinking, anti-hype verification, honest risk/reward, Freetrade suitability, disclaimer).
+Produce today's investment briefing. Follow the rules in `CLAUDE.md` throughout (second-order thinking, anti-hype verification, honest risk/reward, Freetrade suitability, disclaimer, plain-English cause and effect, the user's portfolio first, breadth across markets).
+
+The reader is not an experienced investor and has no new money: every idea is a possible switch from something they already own (`portfolio/holdings.csv`).
 
 Get today's date first (`date +%F`, or `Get-Date -Format yyyy-MM-dd` on Windows PowerShell) and use it for the filename and report header. If `reports/<date>-briefing.md` already exists, ask whether to overwrite it or save as `<date>-briefing-2.md`.
 
 ## Step 1 - Gather news and trends
 
-Launch the **`news-trawler`** subagent. Ask it to run `python scripts/fetch_market_data.py --news --hours 48`, run its targeted live web searches, and return its structured summary of the top 3 to 5 developments and the second-order trends each will trigger.
+Launch the **`news-trawler`** subagent. Ask it to run `python scripts/fetch_market_data.py --news --hours 48`, run its targeted live web searches across all sectors and regions, check news on every holding in `portfolio/holdings.csv`, and return its structured summary: holdings news, market movers, and the top 3 to 5 developments with the second-order trends each will trigger.
 
 If it returns fewer than 3 sourced developments, send it back once with the gaps named before continuing.
 
 ## Step 2 - Find and verify share ideas
 
-Launch the **`equity-analyst`** subagent and pass it the **full text** of the news-trawler output (it has no other context). Also tell it which tickers are already in `watchlists/active-watchlist.csv` so it can re-check them rather than re-pitch them. It must return 2 to 3 candidates per trend, verified with `python scripts/fetch_market_data.py --ticker <SYMBOLS>`, filtered, and scored on Moat, Valuation and Catalyst Strength.
+Launch the **`equity-analyst`** subagent and pass it the **full text** of the news-trawler output (it has no other context). Also tell it which tickers are already in `watchlists/active-watchlist.csv` so it can re-check them rather than re-pitch them. It must review every holding first (`python scripts/fetch_market_data.py --portfolio`) with a Hold/Add/Trim/Sell/Switch verdict, then return 2 to 3 candidates per trend across at least three sectors and including non-US ideas, each framed as a switch from a named holding, verified with `python scripts/fetch_market_data.py --ticker <SYMBOLS>`, filtered, and scored on Moat, Valuation and Catalyst Strength.
 
 Spot-check before writing: re-run the ticker script yourself on the high-conviction names and confirm the figures match. Drop any idea whose data cannot be reproduced.
 
@@ -33,11 +35,30 @@ Save to `reports/YYYY-MM-DD-briefing.md` using this structure:
 _Data pulled: <time UTC>. Prices may be delayed 15+ minutes._
 
 ## Executive Summary
-<4-6 bullets: what changed, the trends that matter, the top ideas, the single biggest risk. Readable in under a minute.>
+<4-6 bullets: what changed, what it means for the user's holdings, the top ideas, the single biggest risk. Readable in under a minute.>
+
+## Your Portfolio
+| Ticker | Holding | Est. value (GBP) | Weight | vs cost | Day | 1 month | Verdict |
+|---|---|---|---|---|---|---|---|
+
+### <TICKER> - <Hold / Add / Trim / Sell / Switch to X>
+- **What's happening:** <the move and the news behind it, including rumours (labelled) and after-hours moves>
+- **Why this verdict:** <plain-English reasoning>
+- **Main risk:** <one line>
+
+### Suggested switches
+<Each: sell/trim X (about N% of the portfolio) -> buy Y; why it improves the odds or lowers risk; costs it must clear (FX fee both ways, stamp duty, crystallising a loss). Or "No switch recommended today" and why.>
+
+### Portfolio health
+<Concentration (US large caps, AI, US dollar), overlap between VUAG and the single shares, and one line on balance.>
+
+## Market Movers
+<3-6 notable moves across sectors and regions, each with its cause.>
 
 ## High-Conviction Trends
 ### 1. <Trend name>
 - **Trigger:** <the news, with source link and date>
+- **In plain English:** <what happened -> why it matters -> who gains or loses, in full sentences a non-investor can follow>
 - **Second-order chain:** <headline effect -> upstream/downstream effect -> who benefits>
 - **Horizon:** <days/weeks | months | years>
 - **What would invalidate it:** <one line>
@@ -54,6 +75,7 @@ _Data pulled: <time UTC>. Prices may be delayed 15+ minutes._
 - **Risks:**
 - **Risk/reward verdict:**
 - **How to buy:** <Freetrade availability and exact ticker; alternative platform if better suited, and why>
+- **Funded by:** <which holding to trim or sell, or "watch only">
 
 ### Short-Term Trades (days to weeks)
 <Same table, then per idea: thesis, entry logic, invalidation level, horizon, reward, risks, FX-cost note for non-GBP names. Write "None today that pass verification." if so.>
@@ -72,7 +94,7 @@ _Data pulled: <time UTC>. Prices may be delayed 15+ minutes._
 <Linked list of articles used, with dates.>
 ```
 
-Writing standards: executive-ready, plain English, no hype words, every number traceable to the script output, `n/a` for anything missing, fact kept separate from inference.
+Writing standards: plain English for a non-expert, explain jargon on first use, show cause and effect, no hype words, at least three sectors and some non-US ideas where they pass, every number traceable to the script output, `n/a` for anything missing, fact kept separate from inference.
 
 ## Step 4 - Update the watchlist
 
@@ -95,16 +117,17 @@ When this skill runs unattended from the scheduled task (rather than typed by th
 
 **After Step 4 - commit and push** the new report and watchlist to `main`.
 
-**Then email the briefing** to the user with the Gmail connector, as an HTML email of about 350-450 words (the length of the 2026-11-15 trial):
+**Then email the briefing** to the user with the Gmail connector, as an HTML email of about 500-650 words. The user said the trial length was about right; the extra is the portfolio section, so keep everything else tight. Write for someone who is not an experienced investor.
 
 - Subject: `Daily Investment Briefing - <Day DD Mon YYYY>`
 - Short research-only disclaimer at the very top
-- **Today's bottom line** (2-3 sentences, the single most useful judgement)
-- **What changed** (3-5 bullets)
-- **Top ideas** table: share, price, forward P/E, revenue growth, score /15, one-line why
-- **The honest risks** (one bullet per top idea, plus concentration)
-- **Short-term trades** with their entry conditions, or "None today that pass verification"
+- **Today's bottom line** (2-3 sentences: the single most useful judgement, including whether to do anything with the portfolio today)
+- **Your portfolio today**: a table (holding, est. value, vs cost, day, 1 month, verdict), then one plain-English line per holding saying what moved it and why. Include rumours (labelled) and after-hours moves that matter.
+- **Moves to consider**: each switch as "Sell/trim X -> buy Y", why, the costs it must clear, and the main risk. Or "No changes recommended today" with the reason. Never suggest new money.
+- **What happened and why it matters**: 3-4 developments, each as a short cause -> effect -> opportunity chain in full sentences, across different sectors and regions
+- **Opportunities across markets**: a small table (share, where it trades, sector, price, score /15, one-line why) with no more than half US tech
+- **The honest risks** (one bullet per idea, plus the portfolio's concentration)
 - **Freetrade notes** (availability, FX fee, stamp duty, better-suited platform where relevant)
-- Footer: how many shares were checked and passed, watchlist additions, data caveats, and the path of the full report in the repository
+- Footer: shares checked and passed, watchlist additions, data caveats ("US prices are yesterday's close"), "check exact values in the Freetrade app", and the path of the full report in the repository
 
 Plain English, no hype. Every figure must come from the report. Send exactly one email per run. If the scan fails part-way, send a short email saying what failed instead of a partial or unverified briefing.

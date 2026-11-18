@@ -7,9 +7,15 @@ Usage:
     python scripts/fetch_market_data.py --news --limit 5 --hours 48
     python scripts/fetch_market_data.py --ticker NVDA ETN RR.L
     python scripts/fetch_market_data.py --ticker NVDA --json
+    python scripts/fetch_market_data.py --portfolio
+    python scripts/fetch_market_data.py --portfolio path/to/holdings.csv
 
 --news uses only the standard library (urllib + xml.etree.ElementTree).
---ticker needs yfinance (pip install -r requirements.txt).
+--ticker and --portfolio need yfinance (pip install -r requirements.txt).
+
+--portfolio reads portfolio/holdings.csv (the user's actual holdings) and
+estimates each holding's value today from the price and GBP/USD moves since
+the value was recorded, then prints full data for every holding.
 
 Ticker suffixes follow Yahoo Finance conventions, e.g. RR.L (London),
 SAP.DE (Xetra), ASML.AS (Amsterdam), 7203.T (Tokyo). London prices are
@@ -17,8 +23,10 @@ quoted in pence (GBp).
 """
 
 import argparse
+import csv
 import html
 import json
+import os
 import re
 import sys
 import urllib.error
@@ -226,6 +234,43 @@ def _pct(value):
     return "n/a" if v is None else "%.1f%%" % (v * 100)
 
 
+def _spct(value):
+    """Signed percentage from a fraction, e.g. 0.031 -> +3.1%."""
+    v = _num(value)
+    return "n/a" if v is None else "%+.1f%%" % (v * 100)
+
+
+def _price_changes(tk):
+    """Return 5-day, 1-month, 3-month and year-to-date % changes (as fractions).
+
+    Uses daily closes, so the reference is the latest close. Any value that
+    cannot be computed is None.
+    """
+    out = {"chg_5d": None, "chg_1m": None, "chg_3m": None, "chg_ytd": None}
+    try:
+        closes = tk.history(period="1y", auto_adjust=False)["Close"].dropna()
+    except Exception:
+        return out
+    if closes.empty:
+        return out
+    last = _num(closes.iloc[-1])
+    if not last:
+        return out
+
+    def change_from(base):
+        base = _num(base)
+        return (last - base) / base if base else None
+
+    for key, days in (("chg_5d", 5), ("chg_1m", 21), ("chg_3m", 63)):
+        if len(closes) > days:
+            out[key] = change_from(closes.iloc[-1 - days])
+    this_year = closes.index[-1].year
+    before = closes[closes.index.year < this_year]
+    if not before.empty:
+        out["chg_ytd"] = change_from(before.iloc[-1])
+    return out
+
+
 def fetch_ticker(symbol):
     """Return a dict of fundamentals for one symbol (never raises)."""
     import yfinance as yf
@@ -280,8 +325,14 @@ def fetch_ticker(symbol):
             "upside_to_mean_target": (target - price) / price if target else None,
             "analyst_count": _num(info.get("numberOfAnalystOpinions")),
             "recommendation": info.get("recommendationKey") or "n/a",
+            "quote_type": info.get("quoteType") or "n/a",
+            "fund_family": info.get("fundFamily"),
+            "fund_total_assets": _num(info.get("totalAssets")),
+            # Yahoo reports this already as a percentage (0.65 = 0.65% a year)
+            "fund_expense_ratio_pct": _num(info.get("netExpenseRatio")),
         }
     )
+    data.update(_price_changes(tk))
     return data
 
 
@@ -297,6 +348,11 @@ def print_ticker(d):
     print("-" * 78)
     rows = [
         ("Price", "%s %s  (day %s)" % (_fmt(d["price"]), cur, _fmt(d["day_change_pct"], "%+.2f%%"))),
+        (
+            "Recent moves",
+            "5 days %s | 1 month %s | 3 months %s | year to date %s"
+            % (_spct(d.get("chg_5d")), _spct(d.get("chg_1m")), _spct(d.get("chg_3m")), _spct(d.get("chg_ytd"))),
+        ),
         (
             "52-week range",
             "%s - %s %s  (%s below high, %s above low)"
@@ -334,10 +390,115 @@ def print_ticker(d):
         ),
         ("Upside to mean target", _fmt(None if d["upside_to_mean_target"] is None else d["upside_to_mean_target"] * 100, "%+.1f%%")),
     ]
+    if d.get("quote_type") == "ETF":
+        rows.append(
+            (
+                "Fund",
+                "%s | size %s | annual fee %s"
+                % (
+                    d.get("fund_family") or "n/a",
+                    _money(d.get("fund_total_assets"), "USD"),
+                    _fmt(d.get("fund_expense_ratio_pct"), "%.2f%%"),
+                ),
+            )
+        )
+        rows.append(("Note", "Fund: company metrics (P/E, debt, cash flow) do not apply."))
     for label, value in rows:
         print("  %-24s %s" % (label, value))
     if cur == "GBp":
         print("  Note: London prices and targets are in pence (GBp).")
+
+
+# --------------------------------------------------------------------------
+# Portfolio
+# --------------------------------------------------------------------------
+DEFAULT_HOLDINGS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "portfolio", "holdings.csv"
+)
+
+
+def _gbpusd():
+    """Current GBP/USD rate (dollars per pound), or None."""
+    import yfinance as yf
+
+    try:
+        return _num(yf.Ticker("GBPUSD=X").fast_info["last_price"])
+    except Exception:
+        return None
+
+
+def build_portfolio(path):
+    """Estimate today's value of each holding. Returns (rows, total, fx, errors)."""
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        holdings = [r for r in csv.DictReader(f) if (r.get("symbol") or "").strip()]
+    fx_now = _gbpusd()
+    rows, errors = [], []
+    for h in holdings:
+        symbol = h["symbol"].strip()
+        data = fetch_ticker(symbol)
+        recorded = _num(h.get("value_gbp"))
+        pct_bought = _num(h.get("pct_since_bought"))
+        ref_price = _num(h.get("ref_price"))
+        ref_fx = _num(h.get("ref_gbpusd"))
+        cost = recorded / (1 + pct_bought / 100) if recorded and pct_bought is not None else None
+        est = None
+        if data.get("error"):
+            errors.append("%s: %s" % (symbol, data["error"]))
+        elif recorded and ref_price:
+            est = recorded * data["price"] / ref_price
+            if (h.get("ref_currency") or "").upper() == "USD":
+                if ref_fx and fx_now:
+                    est *= ref_fx / fx_now
+                else:
+                    errors.append("%s: GBP/USD unavailable, value not FX-adjusted" % symbol)
+        rows.append(
+            {
+                "symbol": symbol,
+                "freetrade_ticker": h.get("freetrade_ticker") or symbol,
+                "name": h.get("name") or data.get("name") or symbol,
+                "type": h.get("type") or "n/a",
+                "value_recorded_gbp": recorded,
+                "value_date": h.get("value_date") or "n/a",
+                "est_value_gbp": est,
+                "cost_gbp_estimate": cost,
+                "est_gain_since_bought": (est / cost - 1) if est and cost else None,
+                "data": data,
+            }
+        )
+    total = sum(r["est_value_gbp"] for r in rows if r["est_value_gbp"])
+    for r in rows:
+        r["weight"] = r["est_value_gbp"] / total if total and r["est_value_gbp"] else None
+    return rows, total, fx_now, errors
+
+
+def print_portfolio(rows, total, fx_now, errors):
+    print("=" * 78)
+    print("YOUR PORTFOLIO  |  estimated values today (from recorded values + price/FX moves)")
+    print("=" * 78)
+    print("  %-8s %-34s %9s %7s %8s %7s %7s" % ("Ticker", "Holding", "Est. GBP", "Weight", "vs cost", "Day", "1 month"))
+    print("  " + "-" * 76)
+    for r in rows:
+        d = r["data"]
+        print(
+            "  %-8s %-34s %9s %7s %8s %7s %7s"
+            % (
+                r["freetrade_ticker"],
+                r["name"][:34],
+                _fmt(r["est_value_gbp"], "%.0f"),
+                _pct(r["weight"]),
+                _spct(r["est_gain_since_bought"]),
+                _fmt(d.get("day_change_pct"), "%+.1f%%"),
+                _spct(d.get("chg_1m")),
+            )
+        )
+    print("  " + "-" * 76)
+    print("  %-43s %9s" % ("Total", _fmt(total, "%.0f")))
+    print("  GBP/USD now: %s. Values are estimates; check the Freetrade app for exact figures." % _fmt(fx_now, "%.4f"))
+    for e in errors:
+        print("  ! %s" % e)
+    print()
+    for r in rows:
+        print_ticker(r["data"])
 
 
 # --------------------------------------------------------------------------
@@ -349,14 +510,31 @@ def main(argv=None):
     )
     parser.add_argument("--news", action="store_true", help="fetch latest headlines from financial RSS feeds")
     parser.add_argument("--ticker", nargs="+", metavar="SYMBOL", help="one or more Yahoo Finance symbols, e.g. NVDA RR.L")
+    parser.add_argument(
+        "--portfolio",
+        nargs="?",
+        const=DEFAULT_HOLDINGS,
+        metavar="CSV",
+        help="review the user's holdings (default: portfolio/holdings.csv)",
+    )
     parser.add_argument("--limit", type=int, default=8, help="max headlines per feed (default: 8)")
     parser.add_argument("--hours", type=float, default=None, help="only show headlines newer than this many hours")
     parser.add_argument("--json", action="store_true", help="output JSON instead of text")
     args = parser.parse_args(argv)
 
-    if not args.news and not args.ticker:
+    if not args.news and not args.ticker and not args.portfolio:
         parser.print_help()
         return 2
+
+    if (args.ticker or args.portfolio):
+        try:
+            import yfinance  # noqa: F401
+        except ImportError:
+            print(
+                "ERROR: yfinance is not installed. Run: pip install -r requirements.txt",
+                file=sys.stderr,
+            )
+            return 1
 
     exit_code = 0
     output = {}
@@ -374,15 +552,26 @@ def main(argv=None):
         if not articles:
             exit_code = 1
 
-    if args.ticker:
-        try:
-            import yfinance  # noqa: F401
-        except ImportError:
-            print(
-                "ERROR: yfinance is not installed. Run: pip install -r requirements.txt",
-                file=sys.stderr,
-            )
+    if args.portfolio:
+        if not os.path.isfile(args.portfolio):
+            print("ERROR: holdings file not found: %s" % args.portfolio, file=sys.stderr)
             return 1
+        rows, total, fx_now, errors = build_portfolio(args.portfolio)
+        if args.json:
+            output["portfolio"] = {
+                "total_est_value_gbp": total,
+                "gbpusd": fx_now,
+                "holdings": rows,
+                "errors": errors,
+            }
+        else:
+            if args.news:
+                print()
+            print_portfolio(rows, total, fx_now, errors)
+        if all(r["data"].get("error") for r in rows):
+            exit_code = 1
+
+    if args.ticker:
         results = [fetch_ticker(s) for s in args.ticker]
         if args.json:
             output["tickers"] = results
