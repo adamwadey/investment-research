@@ -115,7 +115,9 @@ When this skill runs unattended from the scheduled task (rather than typed by th
 
 **Before Step 1 - market-day check.** Only proceed on a weekday when at least one of the London Stock Exchange or the New York Stock Exchange is open for trading that day. Check with a web search for today's date (bank holidays, Good Friday, Christmas, New Year, US holidays such as Thanksgiving). If both are closed, stop: write no report and send no email. If only one is open, proceed and say which is closed in the email's first line.
 
-**After Step 4 - commit and push** the new report and watchlist to `main`.
+**Before Step 1 - pick up stranded reports.** Scheduled runs are sometimes not allowed to push to `main` and push to a `claude/...` branch instead. Run `git fetch origin '+refs/heads/*:refs/remotes/origin/*'`, then merge every `origin/claude/*` branch that is not yet in `main` (`git branch -r --no-merged`), so earlier reports and watchlist additions are not lost. Resolve watchlist conflicts by keeping every row from both sides.
+
+**After Step 4 - commit and push** the new report and watchlist to `main`. If pushing to `main` is refused, push to the session's branch and say so in the email footer; the next run (or the user's session) merges it.
 
 **Then email the briefing** to the user with the Gmail connector, as an HTML email of about 500-650 words. The user said the trial length was about right; the extra is the portfolio section, so keep everything else tight. Write for someone who is not an experienced investor.
 

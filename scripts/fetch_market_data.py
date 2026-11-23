@@ -417,12 +417,12 @@ DEFAULT_HOLDINGS = os.path.join(
 )
 
 
-def _gbpusd():
-    """Current GBP/USD rate (dollars per pound), or None."""
+def _gbp_rate(currency):
+    """Units of `currency` per pound right now (e.g. USD -> 1.30), or None."""
     import yfinance as yf
 
     try:
-        return _num(yf.Ticker("GBPUSD=X").fast_info["last_price"])
+        return _num(yf.Ticker("GBP%s=X" % currency.upper()).fast_info["last_price"])
     except Exception:
         return None
 
@@ -431,7 +431,14 @@ def build_portfolio(path):
     """Estimate today's value of each holding. Returns (rows, total, fx, errors)."""
     with open(path, newline="", encoding="utf-8-sig") as f:
         holdings = [r for r in csv.DictReader(f) if (r.get("symbol") or "").strip()]
-    fx_now = _gbpusd()
+    # ref_currency is the currency the price is quoted in; ref_fx is units of
+    # that currency per pound when the value was recorded (ref_gbpusd is the
+    # older column name, still accepted).
+    currencies = sorted(
+        {(h.get("ref_currency") or "GBP").strip().upper() for h in holdings} - {"GBP", "GBX"}
+    )
+    rates = {c: _gbp_rate(c) for c in currencies}
+    fx_now = rates.get("USD")
     rows, errors = [], []
     for h in holdings:
         symbol = h["symbol"].strip()
@@ -439,18 +446,19 @@ def build_portfolio(path):
         recorded = _num(h.get("value_gbp"))
         pct_bought = _num(h.get("pct_since_bought"))
         ref_price = _num(h.get("ref_price"))
-        ref_fx = _num(h.get("ref_gbpusd"))
+        currency = (h.get("ref_currency") or "GBP").strip().upper()
+        ref_fx = _num(h.get("ref_fx")) or _num(h.get("ref_gbpusd"))
         cost = recorded / (1 + pct_bought / 100) if recorded and pct_bought is not None else None
         est = None
         if data.get("error"):
             errors.append("%s: %s" % (symbol, data["error"]))
         elif recorded and ref_price:
             est = recorded * data["price"] / ref_price
-            if (h.get("ref_currency") or "").upper() == "USD":
-                if ref_fx and fx_now:
-                    est *= ref_fx / fx_now
+            if currency not in ("GBP", "GBX"):
+                if ref_fx and rates.get(currency):
+                    est *= ref_fx / rates[currency]
                 else:
-                    errors.append("%s: GBP/USD unavailable, value not FX-adjusted" % symbol)
+                    errors.append("%s: GBP/%s unavailable, value not FX-adjusted" % (symbol, currency))
         rows.append(
             {
                 "symbol": symbol,
@@ -468,10 +476,10 @@ def build_portfolio(path):
     total = sum(r["est_value_gbp"] for r in rows if r["est_value_gbp"])
     for r in rows:
         r["weight"] = r["est_value_gbp"] / total if total and r["est_value_gbp"] else None
-    return rows, total, fx_now, errors
+    return rows, total, rates, errors
 
 
-def print_portfolio(rows, total, fx_now, errors):
+def print_portfolio(rows, total, rates, errors):
     print("=" * 78)
     print("YOUR PORTFOLIO  |  estimated values today (from recorded values + price/FX moves)")
     print("=" * 78)
@@ -493,7 +501,9 @@ def print_portfolio(rows, total, fx_now, errors):
         )
     print("  " + "-" * 76)
     print("  %-43s %9s" % ("Total", _fmt(total, "%.0f")))
-    print("  GBP/USD now: %s. Values are estimates; check the Freetrade app for exact figures." % _fmt(fx_now, "%.4f"))
+    fx_text = ", ".join("GBP/%s %s" % (c, _fmt(r, "%.4f")) for c, r in sorted(rates.items())) or "none needed"
+    print("  Exchange rates now: %s." % fx_text)
+    print("  Values are estimates; check the Freetrade app for exact figures.")
     for e in errors:
         print("  ! %s" % e)
     print()
@@ -556,18 +566,18 @@ def main(argv=None):
         if not os.path.isfile(args.portfolio):
             print("ERROR: holdings file not found: %s" % args.portfolio, file=sys.stderr)
             return 1
-        rows, total, fx_now, errors = build_portfolio(args.portfolio)
+        rows, total, rates, errors = build_portfolio(args.portfolio)
         if args.json:
             output["portfolio"] = {
                 "total_est_value_gbp": total,
-                "gbpusd": fx_now,
+                "gbp_fx_rates": rates,
                 "holdings": rows,
                 "errors": errors,
             }
         else:
             if args.news:
                 print()
-            print_portfolio(rows, total, fx_now, errors)
+            print_portfolio(rows, total, rates, errors)
         if all(r["data"].get("error") for r in rows):
             exit_code = 1
 
